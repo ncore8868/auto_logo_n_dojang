@@ -29,7 +29,7 @@ from openpyxl.drawing.image import Image as XLImage
 COMPANY = {
     "name": "엔코어(주)",
     "reg_no": "210-88-03747",
-    "ceo": "이재현",
+    "ceo": "김정훈",
     "address": "대구광역시 동구 동화천로77길 46, 3층",
     "biz_type": "건설업",
     "biz_item": "철거 및 리모델링",
