@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-N-CORE 견적서 생성기  (엔코어(주))
+UNION ONE 견적서 생성기  ((주)유니온원)
 사용법:  python make_estimate.py input.json [--out 출력폴더] [--assets 자산폴더]
 
 입력 JSON 을 읽어 항상 같은 양식의  견적서.xlsx / 견적서.pdf 를 만든다.
@@ -27,14 +27,14 @@ from openpyxl.drawing.image import Image as XLImage
 
 # ───────────────────────────── 고정 정보 ─────────────────────────────
 COMPANY = {
-    "name": "엔코어(주)",
+    "name": "(주)유니온원",
     "reg_no": "210-88-03747",
     "ceo": "김정훈",
     "address": "대구광역시 동구 동화천로77길 46, 3층",
     "biz_type": "건설업",
     "biz_item": "철거 및 리모델링",
     "tel": "1551-8757",
-    "bank": "KB국민은행 675001-04-342392 (예금주 : 엔코어(주))",
+    "bank": "KB국민은행 675001-04-342392 (예금주 : (주)유니온원)",
 }
 DEFAULT_CONDITIONS = [
     "본 견적은 견적일로부터 30일간 유효하며, 이후 자재비·인건비·폐기물 처리비 등의 변동 시 재견적할 수 있습니다.",
@@ -48,6 +48,9 @@ ASSET_URLS = [
     "https://raw.githubusercontent.com/ncore8868/auto_logo_n_dojang/main/{}",
     "https://github.com/ncore8868/auto_logo_n_dojang/raw/main/{}",
 ]
+# 로고·도장 파일명 (옛 로고·도장이 섞여 쓰이지 않도록 전용 이름 사용). 도장 파일이 없으면 서명란은 (인)만 표시
+LOGO_FILE = "uo_logo.png"
+STAMP_FILE = "uo_dojang.png"
 ASSET_DIRS = ["./assets", "/mnt/project", "/mnt/knowledge", "/mnt/user-data/uploads", os.path.dirname(os.path.abspath(__file__)), "."]
 
 # 롯데(대기업) 간접공사비 기준 (2026)
@@ -60,8 +63,9 @@ RATE_MISC_MAX = 0.10      # 공과잡비 : 직접공사비의 10% 이내
 STAMP_TABLE = [(10_000_000, 0), (30_000_000, 9_091), (50_000_000, 18_182),
                (100_000_000, 31_818), (1_000_000_000, 68_182), (float("inf"), 159_091)]
 
-ORANGE = colors.HexColor("#EF6E1B")
-ORANGE_LIGHT = colors.HexColor("#FDF1E7")
+NAVY = colors.HexColor("#1B2A41")
+GOLD = colors.HexColor("#B08D57")
+NAVY_LIGHT = colors.HexColor("#EEF1F5")
 DARK = colors.HexColor("#1F1F1F")
 GRAY_TXT = colors.HexColor("#666666")
 GRAY_FILL = colors.HexColor("#F3F3F3")
@@ -446,6 +450,35 @@ class SubmitBlock(Flowable):
             c.drawImage(ImageReader(self.stamp), w / 2 + tw / 2 - 11 * mm, h - 41 * mm, s, s, mask="auto")
 
 
+def transparent_asset(path):
+    """도장·로고 흰 배경 강제 제거 — 파일이 어디서 왔든(프로젝트·업로드·깃허브) 항상 투명 PNG 로 만들어 쓴다.
+    이미 투명하면 그대로 쓰고, 흰 배경이면 color-to-alpha 방식으로 흰색만 빼서 ./assets/_t_<이름> 에 저장한다."""
+    if not path or not os.path.isfile(path):
+        return path
+    try:
+        im = PILImage.open(path).convert("RGBA")
+        w, h = im.size
+        px = im.load()
+        corners = [px[0, 0], px[w - 1, 0], px[0, h - 1], px[w - 1, h - 1]]
+        if all(c[3] < 20 for c in corners):
+            return path  # 이미 배경이 투명
+        import numpy as np
+        arr = np.asarray(im).astype(np.float64)
+        rgb, a0 = arr[..., :3], arr[..., 3]
+        al = (255.0 - rgb.min(axis=2)) / 255.0
+        safe = np.where(al > 0, al, 1.0)[..., None]
+        col = np.clip((rgb - 255.0 * (1.0 - al[..., None])) / safe, 0, 255)
+        alpha = np.where(al < 0.06, 0, np.round(al * a0))
+        col[alpha == 0] = 255
+        out = PILImage.fromarray(np.dstack([col, alpha]).astype(np.uint8), "RGBA")
+        os.makedirs("./assets", exist_ok=True)
+        dst = os.path.abspath(os.path.join("./assets", "_t_" + os.path.basename(path)))
+        out.save(dst)
+        return dst
+    except Exception:
+        return path
+
+
 def make_watermark(logo_path, alpha=0.06):
     if not logo_path:
         return None
@@ -453,7 +486,8 @@ def make_watermark(logo_path, alpha=0.06):
     r, g, b, a = im.split()
     a = a.point(lambda v: int(v * alpha))
     im.putalpha(a)
-    out = os.path.join(os.path.dirname(logo_path) or ".", "_wm.png")
+    os.makedirs("./assets", exist_ok=True)
+    out = os.path.abspath(os.path.join("./assets", "_wm.png"))
     im.save(out)
     return out
 
@@ -463,8 +497,8 @@ def build_pdf(data, res, out_path, assets_dir):
     pdfmetrics.registerFont(TTFont("KR", reg, subfontIndex=idx))
     pdfmetrics.registerFont(TTFont("KRB", bold, subfontIndex=idx))
     FONTS = ("KR", "KRB")
-    logo = find_asset("logo.png", assets_dir)
-    stamp = find_asset("dojang.png", assets_dir)
+    logo = transparent_asset(find_asset(LOGO_FILE, assets_dir))
+    stamp = transparent_asset(find_asset(STAMP_FILE, assets_dir))
     wm = make_watermark(logo)
     proj = data["project"]
     mode = res["mode"]
@@ -483,8 +517,8 @@ def build_pdf(data, res, out_path, assets_dir):
             im = PILImage.open(wm)
             hh = ww * im.size[1] / im.size[0]
             canvas.drawImage(ImageReader(wm), (w - ww) / 2, (h - hh) / 2, ww, hh, mask="auto")
-        # 상단 얇은 오렌지 라인
-        canvas.setStrokeColor(ORANGE); canvas.setLineWidth(2.2)
+        # 상단 얇은 골드 라인
+        canvas.setStrokeColor(GOLD); canvas.setLineWidth(2.2)
         canvas.line(0, h - 6 * mm, w, h - 6 * mm)
         # 푸터
         canvas.setFont("KR", 7.5); canvas.setFillColor(GRAY_TXT)
@@ -492,8 +526,8 @@ def build_pdf(data, res, out_path, assets_dir):
         canvas.drawRightString(w - M, 8 * mm, f"-  {doc.page}  -")
         if doc.page > 1 and logo:
             im = PILImage.open(logo)
-            lw = 20 * mm
-            canvas.drawImage(ImageReader(logo), w - M - lw, h - 6 * mm - 8.5 * mm, lw, lw * im.size[1] / im.size[0], mask="auto")
+            lw = 14 * mm
+            canvas.drawImage(ImageReader(logo), w - M - lw, h - 6 * mm - 9 * mm, lw, lw * im.size[1] / im.size[0], mask="auto")
         canvas.restoreState()
 
     doc = BaseDocTemplate(out_path, pagesize=A4, leftMargin=M, rightMargin=M, topMargin=14 * mm, bottomMargin=16 * mm,
@@ -510,7 +544,7 @@ def build_pdf(data, res, out_path, assets_dir):
         kw.setdefault("leading", size * 1.35)
         return ParagraphStyle(name, fontName=kw.pop("font", "KR"), fontSize=size, **kw)
     S_TITLE = st("t", 22, font="KRB", alignment=TA_CENTER, textColor=DARK, leading=27)
-    S_H = st("h", 11, font="KRB", textColor=ORANGE)
+    S_H = st("h", 11, font="KRB", textColor=NAVY)
     S_SM = st("sm", 8.5, textColor=DARK)
     S_SMG = st("smg", 8, textColor=GRAY_TXT)
     S_CELL = st("cell", 7, textColor=DARK, leading=9)
@@ -523,17 +557,17 @@ def build_pdf(data, res, out_path, assets_dir):
     # ── 표지 헤더
     if logo:
         im = PILImage.open(logo)
-        lw = 38 * mm
+        lw = 34 * mm
         from reportlab.platypus import Image as RLImage
         logo_fl = RLImage(logo, lw, lw * im.size[1] / im.size[0])
     else:
-        logo_fl = Paragraph("N-CORE", S_H)
+        logo_fl = Paragraph("UNION ONE", st("lgt", 16, font="KRB", textColor=NAVY))
     hdr = Table([[logo_fl, ""]], colWidths=[W * 0.5, W * 0.5])
     hdr.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
     story += [hdr, Spacer(1, 2.5 * mm)]
     story.append(Paragraph("견 &nbsp; 적 &nbsp; 서", S_TITLE))
     rule = Table([[""]], colWidths=[W], rowHeights=[1.2 * mm])
-    rule.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), ORANGE)]))
+    rule.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), GOLD)]))
     story += [Spacer(1, 1 * mm), rule, Spacer(1, 3.5 * mm)]
 
     # ── 공급자 / 공사개요
@@ -543,7 +577,7 @@ def build_pdf(data, res, out_path, assets_dir):
             body.append([Paragraph(k, S_CELL_C), Paragraph(str(v), S_CELL)])
         t = Table(body, colWidths=[22 * mm, width - 22 * mm], rowHeights=[5.8 * mm] + [None] * len(rows))
         t.setStyle(TableStyle([
-            ("SPAN", (0, 0), (1, 0)), ("BACKGROUND", (0, 0), (1, 0), ORANGE),
+            ("SPAN", (0, 0), (1, 0)), ("BACKGROUND", (0, 0), (1, 0), NAVY),
             ("BACKGROUND", (0, 1), (0, -1), GRAY_FILL),
             ("GRID", (0, 0), (-1, -1), 0.5, LINE), ("BOX", (0, 0), (-1, -1), 0.8, LINE_DARK),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("TOPPADDING", (0, 1), (-1, -1), 1.6), ("BOTTOMPADDING", (0, 1), (-1, -1), 1.6),
@@ -572,8 +606,8 @@ def build_pdf(data, res, out_path, assets_dir):
                             st("a2", 12.5, textColor=DARK)),
                   Paragraph(f"<font size=7.5 color='#666666'>부가세 포함</font><br/><b>₩ {res['grand']:,}</b>", st("a3", 10, alignment=TA_RIGHT, textColor=DARK, leading=13))]],
                 colWidths=[28 * mm, W - 28 * mm - 42 * mm, 42 * mm], rowHeights=[11 * mm])
-    amt.setStyle(TableStyle([("BACKGROUND", (0, 0), (0, 0), ORANGE), ("BACKGROUND", (1, 0), (-1, 0), ORANGE_LIGHT),
-                             ("BOX", (0, 0), (-1, -1), 1, ORANGE), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    amt.setStyle(TableStyle([("BACKGROUND", (0, 0), (0, 0), NAVY), ("BACKGROUND", (1, 0), (-1, 0), NAVY_LIGHT),
+                             ("BOX", (0, 0), (-1, -1), 1, NAVY), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                              ("LEFTPADDING", (1, 0), (1, 0), 6), ("RIGHTPADDING", (2, 0), (2, 0), 6)]))
     story += [amt, Spacer(1, 3.5 * mm)]
 
@@ -603,7 +637,7 @@ def build_pdf(data, res, out_path, assets_dir):
     r = len(rows)
     rows.append(["합 계 (부가세 별도)", "", "", won(res["total"]), Paragraph("만 단위 절사", st("wn", 8, textColor=colors.white, alignment=TA_CENTER))])
     style += [("FONTNAME", (0, r), (-1, r), "KRB"), ("ALIGN", (0, r), (0, r), "CENTER"),
-              ("BACKGROUND", (0, r), (-1, r), ORANGE), ("TEXTCOLOR", (0, r), (-1, r), colors.white), ("FONTSIZE", (0, r), (-1, r), 9.5),
+              ("BACKGROUND", (0, r), (-1, r), NAVY), ("TEXTCOLOR", (0, r), (-1, r), colors.white), ("FONTSIZE", (0, r), (-1, r), 9.5),
               ("TOPPADDING", (0, r), (-1, r), 2.5), ("BOTTOMPADDING", (0, r), (-1, r), 2.5)]
     t = Table(rows, colWidths=cw)
     t.setStyle(TableStyle(style))
@@ -635,7 +669,7 @@ def build_pdf(data, res, out_path, assets_dir):
     for sec in res["sections"]:
         i = len(drows)
         drows.append([Paragraph(f"<b>{sec['_no']}. {sec['name']}</b>", S_CELLB)] + [""] * 10)
-        dstyle += [("SPAN", (0, i), (-1, i)), ("BACKGROUND", (0, i), (-1, i), ORANGE_LIGHT), ("NOSPLIT", (0, i), (-1, i + 1))]
+        dstyle += [("SPAN", (0, i), (-1, i)), ("BACKGROUND", (0, i), (-1, i), NAVY_LIGHT), ("NOSPLIT", (0, i), (-1, i + 1))]
         for it in sec["items"]:
             drows.append([Paragraph(it.get("name", ""), S_CELL), Paragraph(it.get("spec", "") or "", S_CELL), it.get("unit", ""), fmt_qty(it["_qty"]),
                           won(it["_mat"]), won(it["_mat_amt"]), won(it["_lab"]), won(it["_lab_amt"]), won(it["_sum"]), won(it["_sum_amt"]),
@@ -659,14 +693,14 @@ def build_pdf(data, res, out_path, assets_dir):
     conds = data.get("conditions") or DEFAULT_CONDITIONS
     crow = []
     for n, c in enumerate(conds, 1):
-        crow.append([Paragraph(f"<b>{n}.</b>", st("cn", 9.5, font="KRB", textColor=ORANGE)), Paragraph(c, S_COND)])
+        crow.append([Paragraph(f"<b>{n}.</b>", st("cn", 9.5, font="KRB", textColor=GOLD)), Paragraph(c, S_COND)])
     ct = Table(crow, colWidths=[8 * mm, W - 8 * mm])
     ct.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
                             ("LINEBELOW", (0, 0), (-1, -2), 0.3, LINE)]))
     story += [ct, Spacer(1, 8 * mm)]
     bank = Table([[Paragraph("입 금 계 좌", st("b1", 9.5, font="KRB", textColor=colors.white, alignment=TA_CENTER)),
                    Paragraph(f"<b>{COMPANY['bank']}</b>", st("b2", 10.5, textColor=DARK))]], colWidths=[30 * mm, W - 30 * mm], rowHeights=[10 * mm])
-    bank.setStyle(TableStyle([("BACKGROUND", (0, 0), (0, 0), ORANGE), ("BACKGROUND", (1, 0), (1, 0), ORANGE_LIGHT), ("BOX", (0, 0), (-1, -1), 1, ORANGE),
+    bank.setStyle(TableStyle([("BACKGROUND", (0, 0), (0, 0), NAVY), ("BACKGROUND", (1, 0), (1, 0), NAVY_LIGHT), ("BOX", (0, 0), (-1, -1), 1, NAVY),
                               ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (1, 0), (1, 0), 8)]))
     story += [bank, Spacer(1, 16 * mm), SubmitBlock(W, date_kor, stamp, FONTS)]
     doc.build(story)
@@ -682,7 +716,7 @@ def build_xlsx(data, res, out_path, assets_dir):
     F = "맑은 고딕"
     thin = Side(style="thin", color="BFBFBF"); med = Side(style="medium", color="555555")
     B_ALL = Border(left=thin, right=thin, top=thin, bottom=thin)
-    OR = PatternFill("solid", fgColor="EF6E1B"); ORL = PatternFill("solid", fgColor="FDF1E7")
+    OR = PatternFill("solid", fgColor="1B2A41"); ORL = PatternFill("solid", fgColor="EEF1F5"); GD = PatternFill("solid", fgColor="B08D57")
     G1 = PatternFill("solid", fgColor="F3F3F3"); G2 = PatternFill("solid", fgColor="E6E6E6")
     NUM = '#,##0;-#,##0;"-"'
     C = Alignment(horizontal="center", vertical="center", wrap_text=True)
@@ -762,15 +796,15 @@ def build_xlsx(data, res, out_path, assets_dir):
     ws = wb.create_sheet("견적서", 0)
     for col, w in zip("ABCDEFGH", [13, 22, 14, 3, 13, 22, 14, 3]):
         ws.column_dimensions[col].width = w
-    logo = find_asset("logo.png", assets_dir)
+    logo = transparent_asset(find_asset(LOGO_FILE, assets_dir))
     if logo:
-        img = XLImage(logo); ratio = img.height / img.width; img.width = 190; img.height = int(190 * ratio)
+        img = XLImage(logo); ratio = img.height / img.width; img.width = 120; img.height = int(120 * ratio)
         ws.add_image(img, "A1")
     ws.row_dimensions[1].height = 48
     ws.merge_cells("A3:H3"); ws["A3"] = "견   적   서"; ws["A3"].font = f(size=22, bold=True); ws["A3"].alignment = C
     ws.row_dimensions[3].height = 40
     for j in range(1, 9):
-        ws.cell(4, j).fill = OR
+        ws.cell(4, j).fill = GD
     ws.row_dimensions[4].height = 4
 
     def block(r0, c0, title, rows):
@@ -803,7 +837,7 @@ def build_xlsx(data, res, out_path, assets_dir):
         ws.cell(r, j).border = Border(top=med, bottom=med, left=med if j == 1 else None, right=med if j == 8 else None)
     # 총괄
     r = 18
-    ws[f"A{r}"] = "공 사 비 총 괄"; ws[f"A{r}"].font = f(size=10, bold=True, color="EF6E1B")
+    ws[f"A{r}"] = "공 사 비 총 괄"; ws[f"A{r}"].font = f(size=10, bold=True, color="1B2A41")
     r += 1
     heads = ["구  분", "", "재 료 비", "", "노 무 비", "합  계", "비  고", ""]
     for j, h in enumerate(heads, 1):
@@ -865,13 +899,13 @@ def build_xlsx(data, res, out_path, assets_dir):
         for j in range(1, 9):
             ws.cell(rr, j).border = B_ALL
         ws.row_dimensions[rr].height = 22
-    stamp = find_asset("dojang.png", assets_dir)
+    stamp = transparent_asset(find_asset(STAMP_FILE, assets_dir))
     if stamp:
         img = XLImage(stamp); img.width = 62; img.height = 64
         ws.add_image(img, f"G{r}")
     r += 4
     # 부대조건
-    ws[f"A{r}"] = "부대조건 및 특기사항"; ws[f"A{r}"].font = f(size=10, bold=True, color="EF6E1B"); r += 1
+    ws[f"A{r}"] = "부대조건 및 특기사항"; ws[f"A{r}"].font = f(size=10, bold=True, color="1B2A41"); r += 1
     for n, cnd in enumerate(data.get("conditions") or DEFAULT_CONDITIONS, 1):
         ws.merge_cells(f"A{r}:H{r}"); ws[f"A{r}"] = f"{n}. {cnd}"; ws[f"A{r}"].font = f(size=8.5); ws[f"A{r}"].alignment = Alignment(wrap_text=True, vertical="center")
         ws.row_dimensions[r].height = 26; r += 1
@@ -916,7 +950,7 @@ def main():
     proj = data["project"]
     date_str = proj.get("date") or datetime.date.today().isoformat()
     safe = re.sub(r'[\\/:*?"<>|\[\]\s]+', "_", proj.get("site_name", "견적")).strip("_")[:40]
-    base = os.path.join(a.out, f"엔코어_견적서_{safe}_{date_str}")
+    base = os.path.join(a.out, f"유니온원_견적서_{safe}_{date_str}")
     build_pdf(data, res, base + ".pdf", a.assets)
     build_xlsx(data, res, base + ".xlsx", a.assets)
     print("OUTPUT:", base + ".pdf")
